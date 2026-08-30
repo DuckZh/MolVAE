@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境
+molvae_env/
+
+# 数据文件
+data/*.csv
+data/*.txt
+
+# 模型和结果
+src/result/*.pth
+src/result/*.csv
+src/result/*.png
+
+# 日志
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
