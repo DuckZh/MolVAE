@@ -1,0 +1,113 @@
+"""
+文件名：generate.py
+功能：批量生成分子，记录RDKit校验结果，保存到CSV
+用法：python generate.py --num 1000
+"""
+
+import os
+import sys
+import argparse
+import torch
+import pandas as pd
+from rdkit import Chem
+from config import *
+from train import VAE
+
+# --- 解析命令行参数 ---
+parser = argparse.ArgumentParser(description='批量生成分子')
+parser.add_argument('--num', type=int, default=1000, help='要生成的分子数量')
+parser.add_argument('--output', type=str, default=None, help='输出文件名（不含路径）')
+args = parser.parse_args()
+
+gen_num = args.num
+output_name = args.output if args.output else f'generated_{gen_num}.csv'
+
+# --- 1. 加载模型 ---
+print(f"正在加载模型: {PT_PATH}")
+model = VAE().to(DEVICE)
+model.load_state_dict(torch.load(PT_PATH, map_location=DEVICE))
+model.eval()
+print("模型加载完成。")
+
+# --- 2. 生成分子 ---
+print(f"开始生成 {gen_num} 个分子...")
+
+records = []  # 每条记录包含：原始SMILES、是否有效、失败原因
+
+with torch.no_grad():
+    z = torch.randn(gen_num, Z_DIM).to(DEVICE)
+    sample = model.decoder(z)
+
+    for i in range(gen_num):
+        matrix = sample[i].view(1, MAX_SIZE, F_COL).cpu()[0]
+        record = {
+            'index': i,
+            'raw_smiles': '',
+            'valid': False,
+            'reason': ''
+        }
+
+        try:
+            # 解析原子数量
+            atom_num = torch.argmax(matrix[:, 0]).item() + 1
+            if atom_num <= 0:
+                record['reason'] = '原子数为0'
+                records.append(record)
+                continue
+
+            # 解析原子类型
+            nodes = torch.max(matrix[:, 1:ATOM_LEN+1], -1)[1][:atom_num]
+            # 解析化学键
+            bonds = matrix[:, ATOM_LEN+1:].reshape(MAX_SIZE, MAX_SIZE, BOND_LEN)
+            edges = torch.max(bonds, dim=-1)[1][:atom_num, :atom_num]
+
+            # 构建 RDKit 分子对象
+            mol = Chem.RWMol()
+            for node_label in nodes.numpy():
+                mol.AddAtom(Chem.Atom(atom_decoder_m[node_label]))
+
+            edge_indices = torch.nonzero(edges)
+            for start, end in edge_indices:
+                if start < end:
+                    bond_type = bond_decoder_m[edges[start, end].item()]
+                    mol.AddBond(int(start), int(end), bond_type)
+
+            # 获取原始 SMILES（未校验）
+            raw_mol = Chem.MolFromSmiles(Chem.MolToSmiles(mol), sanitize=False)
+            if raw_mol:
+                record['raw_smiles'] = Chem.MolToSmiles(raw_mol)
+
+            # RDKit 严格校验
+            Chem.SanitizeMol(mol)
+            final_smiles = Chem.MolToSmiles(mol)
+            record['raw_smiles'] = final_smiles
+            record['valid'] = True
+
+        except Exception as e:
+            record['reason'] = str(e)
+
+        records.append(record)
+
+# --- 3. 统计结果 ---
+df = pd.DataFrame(records)
+valid_count = df['valid'].sum()
+invalid_count = len(df) - valid_count
+
+print(f"\n{'='*50}")
+print(f"生成完成！")
+print(f"  总数: {gen_num}")
+print(f"  通过RDKit校验: {valid_count} ({valid_count/gen_num*100:.1f}%)")
+print(f"  未通过校验: {invalid_count} ({invalid_count/gen_num*100:.1f}%)")
+print(f"{'='*50}")
+
+# 打印前5个失败原因（如果有的话）
+if invalid_count > 0:
+    failed = df[~df['valid']]
+    print(f"\n前5个失败原因:")
+    for _, row in failed.head(5).iterrows():
+        print(f"  分子 {row['index']}: {row['reason']}")
+
+# --- 4. 保存到CSV ---
+output_path = os.path.join(DATA_DISK_CKPT_DIR, output_name)
+df.to_csv(output_path, index=False)
+print(f"\n结果已保存至: {output_path}")
