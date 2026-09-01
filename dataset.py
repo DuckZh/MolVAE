@@ -11,41 +11,62 @@ from config import *
 
 
 def node_features(mol, max_length=MAX_SIZE, atom_types=ATOM_LEN):
+    """
+    生成节点特征矩阵 - 只包含原子类型，不包含环信息
+    """
     features = np.zeros([max_length, atom_types], dtype=np.float32)
+    
     for i, atom in enumerate(mol.GetAtoms()):
+        if i >= max_length:
+            break
         atomic_num = atom.GetAtomicNum()
         if atomic_num in atom_encoder_m:
             features[i, atom_encoder_m[atomic_num]] = 1.0
+    
+    # 填充虚拟原子
     actual_atoms = min(mol.GetNumAtoms(), max_length)
     features[actual_atoms:, 0] = 1.0
+    
     return torch.tensor(features, dtype=torch.float32)
 
 
 def bond_features(mol, max_length=MAX_SIZE):
+    """生成边特征矩阵"""
     bond_types = BOND_LEN
     A = torch.zeros(bond_types, dtype=torch.int32)
     A[0] = 1
     A = A.expand(max_length, max_length, bond_types).clone()
+    
     for bond in mol.GetBonds():
         begin = bond.GetBeginAtomIdx()
         end = bond.GetEndAtomIdx()
         i = min(begin, end)
         j = max(begin, end)
+        if i >= max_length or j >= max_length:
+            continue
         bond_code = bond_encoder_m[bond.GetBondType()]
         bond_onehot = torch.zeros(bond_types, dtype=torch.int32)
         bond_onehot[bond_code] = 1
         A[i, j] = bond_onehot
+    
     A = A.reshape(max_length, -1)
     return A
 
 
 def mol_to_graph(mol, length, smiles=''):
     try:
-        mol_length = mol.GetNumAtoms() - 1
+        # 原子数独热
+        mol_length = min(mol.GetNumAtoms(), MAX_SIZE) - 1
         vec_length = torch.zeros([MAX_SIZE, 1], dtype=torch.float)
         vec_length[mol_length, 0] = 1.0
+        
+        # 节点特征 - 只有原子类型 (ATOM_LEN)
         atom_feat = node_features(mol, MAX_SIZE)
+        
+        # 边特征
         bond_feat = bond_features(mol, MAX_SIZE)
+        
+        # 拼接: [长度(1)] + [原子类型(ATOM_LEN)] + [键信息(MAX_SIZE*BOND_LEN)]
         graph = torch.cat([vec_length, atom_feat, bond_feat], 1).float()
         return graph
     except Exception as e:
@@ -55,19 +76,16 @@ def mol_to_graph(mol, length, smiles=''):
 
 # ==================== 读取数据 ====================
 print("Loading data...")
-df = pd.read_csv(DATA_FILE, names=["SMILES", "Length"], skiprows=1)
+df = pd.read_csv(DATA_FILE, names=["SMILES", "Length"])
 
-# 先转换为 mol 对象
 df["mol"] = df["SMILES"].apply(lambda x: Chem.MolFromSmiles(x))
 df = df[df["mol"].notna()].reset_index(drop=True)
 
-# 用原子数筛选（而不是字符串长度）
 df["num_atoms"] = df["mol"].apply(lambda x: x.GetNumAtoms())
 df = df[df["num_atoms"] <= MAX_SIZE].reset_index(drop=True)
 
 print(f"筛选后剩余 {len(df)} 个分子 (原子数 <= {MAX_SIZE})")
 
-# 生成特征矩阵
 df['graph'] = df[['mol', 'Length', 'SMILES']].apply(
     lambda row: mol_to_graph(mol=row['mol'], length=row['Length'], smiles=row['SMILES']),
     axis=1
@@ -105,6 +123,7 @@ train_loader = DataLoader(
     batch_size=BATCH_SIZE,
     shuffle=True,
     drop_last=True,
+    num_workers=4,
 )
 
 test_loader = DataLoader(
@@ -112,6 +131,7 @@ test_loader = DataLoader(
     batch_size=BATCH_SIZE,
     shuffle=False,
     drop_last=True,
+    num_workers=4,
 )
 
 print(f"训练集: {len(train_dataset)} 个样本, {len(train_loader)} 个批次")
