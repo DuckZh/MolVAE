@@ -2,31 +2,37 @@
 __pycache__/
 *.pyc
 *.pyo
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
+*.pyd
+.Python
 
-# 虚拟环境
+# Virtual Environment
 molvae_env/
-
-# 数据文件
-data/*.csv
-data/*.txt
-
-# 模型和结果
-src/result/*.pth
-src/result/*.csv
-src/result/*.png
-
-# 日志
-*.log
+venv/
+env/
 
 # IDE
 .idea/
 .vscode/
 *.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Results (optional: keep model files but ignore large datasets)
+result/*.pth
+result/*.csv
+!result/.gitkeep
+
+# Data (if large)
+data/*.csv
+!data/.gitkeep
+
+# Logs
+*.log
+nohup.out
 
 # OS
 .DS_Store
+Thumbs.db
